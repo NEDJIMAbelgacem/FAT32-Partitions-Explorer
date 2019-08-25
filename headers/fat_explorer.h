@@ -6,6 +6,10 @@
 #include <errno.h>
 #include <string.h>
 
+#define cast_to_int(b) (*((int*)(&b)))
+#define cast_to_llong(b) (*((long long*)(&b)))
+
+
 #define PARTITION_MBR_OFFSET 0x1be
 #define bool int
 #define true 1
@@ -14,6 +18,11 @@
 #define SECTOR_SIZE 512
 #define FAT32_ENTRY_SIZE 4
 #define DIRECTORY_ENTRY_SIZE 32
+
+// File system types signatures
+#define FAT32_ID 0x0B
+#define NTFS 0x07
+#define GPT_ID 0xEE
 
 #define FAT32_UNUSED_DIRECTORY_RECORD_MARKER 0xE5
 #define FAT32_DIRECTORY_RECORDS_END_MARKER 0x00
@@ -53,8 +62,8 @@ typedef struct PartitionEntry {
 	byte chs_begin[3];
 	byte type;
 	byte chs_end[3];
-	int lba_begin;
-	int nb_sectors;
+	unsigned int lba_begin;
+	unsigned int nb_sectors;
 } PartitionEntry;
 
 typedef struct MasterBootRecord {
@@ -62,6 +71,31 @@ typedef struct MasterBootRecord {
 	PartitionEntry entries[4];
 	byte signature[2];
 } MasterBootRecord;
+
+typedef struct GPTHeader {
+	byte signature[8];
+	byte version[4];
+	int current_size; // little indian
+	int current_crc32;
+	long long header_start_lba;
+	long long backup_start_lba;
+	long long data_start_lba;
+	long long data_end_lba;
+	byte guid[16];
+	long long partitions_table_lba;
+	int partitions_table_length;
+	int partition_entry_size;
+	int partitions_table_crc32;
+} GPTHeader;
+
+typedef struct GPTPartitionEntry {
+	byte guid_type[16];
+	byte guid[16];
+	long long first_lba;
+	long long last_lba;
+	long long attr_flags;
+	byte partition_name[72];
+} GPTPartitionEntry;
 
 typedef struct FAT32VolumeID {
 	// some needed FAT32 VolumeID table data
@@ -148,16 +182,21 @@ void convert_utf16_to_wchar(byte* str, int str_len, wchar_t* w_str, int* wstr_le
 bool load_cluster(FILE* disk, FAT32VolumeID* volume_id, int cluster_num, byte* cluster);
 
 // sector pointer should e pointing to already allocated memory of sufficient size
-bool load_sector(FILE* disk, FAT32VolumeID* volume_id, int lba_adr, byte* sector);
+bool load_sector(FILE* disk, int lba_adr, byte* sector);
 
 // TODO : handle the first 446 bytes of MBR sector 
 // disk file should be open
 MasterBootRecord* load_MBR_sector(FILE* disk);
 
+GPTHeader* load_GPT_header(FILE* disk);
+
+GPTPartitionEntry* load_gpt_partition_entry(FILE* disk, GPTHeader* gpt_header, int index);
+
 void print_MBR_sector_info(MasterBootRecord* mbr);
 
 // load FAT32 VolumeID table informations using MBR data
 FAT32VolumeID* load_VolumeID_table(FILE* disk, MasterBootRecord* mbr);
+FAT32VolumeID* load_VolumeID_table_gpt(FILE* disk, GPTPartitionEntry* part_info);
 
 void print_FAT32_volume_id(FAT32VolumeID* volume_id);
 
@@ -195,3 +234,14 @@ void load_subdirectory(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* node
 void print_sector(int lba_adr, byte* buffer);
 
 void delete_file(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* curent_dir, int file_num);
+
+bool is_fat32_partition(PartitionEntry* partition);
+bool is_using_gpt(MasterBootRecord* mbr);
+
+#define assert(expr) if(!(expr)) { \
+	printf("Error : at %s:%d \n", __FILE__, __LINE__); \
+}
+
+#define assert_msg(expr, str) if(!(expr)) { \
+	printf("Error : %s, at %s:%d \n", str, __FILE__, __LINE__); \
+}

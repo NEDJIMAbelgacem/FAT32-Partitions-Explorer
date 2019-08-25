@@ -21,8 +21,8 @@ void convert_utf16_to_wchar(byte* str, int str_len, wchar_t* w_str, int* wstr_le
 
 // cluster pointer should e pointing to already allocated memory of sufficient size
 bool load_cluster(FILE* disk, FAT32VolumeID* volume_id, int cluster_num, byte* cluster) {
-	int cluster_lba = volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_num - 2);
-	int cluster_offset = SECTOR_SIZE * cluster_lba;
+	unsigned int cluster_lba = volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_num - 2);
+	unsigned int cluster_offset = SECTOR_SIZE * cluster_lba;
 	int n;
 	n = fseek(disk, cluster_offset, SEEK_SET);
 	if (n != 0) {
@@ -38,7 +38,7 @@ bool load_cluster(FILE* disk, FAT32VolumeID* volume_id, int cluster_num, byte* c
 }
 
 // sector pointer should e pointing to already allocated memory of sufficient size
-bool load_sector(FILE* disk, FAT32VolumeID* volume_id, int lba_adr, byte* sector) {
+bool load_sector(FILE* disk, int lba_adr, byte* sector) {
 	int n = fseek(disk, SECTOR_SIZE * lba_adr, SEEK_SET);
 	if (n != 0) {
 		printf("Error seeking position %d \n", SECTOR_SIZE * lba_adr);
@@ -56,21 +56,7 @@ bool load_sector(FILE* disk, FAT32VolumeID* volume_id, int lba_adr, byte* sector
 // disk file should be open
 MasterBootRecord* load_MBR_sector(FILE* disk) {
 	byte buffer[512];
-	int n;
-	if (disk == NULL) {
-		printf("Error : Called with NULL disk file at %s:%d \n", __FILE__, __LINE__);
-		exit(-1);
-	}
-	n = fseek(disk, 0, SEEK_SET);
-	if (n != 0) {
-		printf("Error : Failed to read MBR sector at %s:%d \n", __FILE__, __LINE__);
-		exit(-1);
-	}
-	n = fread(buffer, SECTOR_SIZE, 1, disk);
-	if (n != 1) {
-		printf("Error : Failed to read MBR sector at %s:%d \n", __FILE__, __LINE__);
-		exit(-1);
-	}
+	assert_msg(load_sector(disk, 0, buffer), "loading MBR");
 	MasterBootRecord* mbr = (MasterBootRecord*)malloc(1 * sizeof(MasterBootRecord));
 	for (int i = 0; i < 4; ++i) {
 		int offset = PARTITION_MBR_OFFSET + 16 * i;
@@ -78,12 +64,51 @@ MasterBootRecord* load_MBR_sector(FILE* disk) {
 		for (int j = 0; j < 3; ++j) mbr->entries[i].chs_begin[j] = buffer[offset + 1 + j];
 		mbr->entries[i].type = buffer[offset + 4];
 		for (int j = 0; j < 3; ++j) mbr->entries[i].chs_end[j] = buffer[offset + 5 + j];
-		mbr->entries[i].lba_begin = *((int*)(buffer + offset + 8));
-		mbr->entries[i].nb_sectors = *((int*)(buffer + offset + 12));
+		mbr->entries[i].lba_begin = *((unsigned int*)(buffer + offset + 8));
+		mbr->entries[i].nb_sectors = *((unsigned int*)(buffer + offset + 12));
+		printf("%d\n", mbr->entries[i].nb_sectors);
 	}
 	mbr->signature[0] = buffer[510];
 	mbr->signature[1] = buffer[511];
 	return mbr;
+}
+
+GPTHeader* load_GPT_header(FILE* disk) {
+	byte buffer[512];
+	assert_msg(load_sector(disk, 1, buffer), "loading GPT");
+	GPTHeader* gpt = (GPTHeader*)malloc(sizeof(GPTHeader));
+	for (int i = 0; i < 8; ++i) gpt->signature[i] = buffer[i];
+	for (int i = 0; i < 4; ++i) gpt->version[i] = buffer[8 + i];
+	gpt->current_size = cast_to_int(buffer[12]);
+	gpt->current_crc32 = cast_to_int(buffer[16]);
+	gpt->header_start_lba = cast_to_llong(buffer[24]);
+	gpt->backup_start_lba = cast_to_llong(buffer[32]);
+	gpt->data_start_lba = cast_to_llong(buffer[40]);
+	gpt->data_end_lba = cast_to_llong(buffer[48]);
+	for (int i = 0; i < 16; ++i) gpt->guid[i] = buffer[56 + i];
+	gpt->partitions_table_lba = cast_to_llong(buffer[72]);
+	gpt->partitions_table_length = cast_to_int(buffer[80]);
+	gpt->partition_entry_size = cast_to_int(buffer[84]);
+	gpt->partitions_table_crc32 = cast_to_int(buffer[88]);
+	return gpt;
+}
+
+GPTPartitionEntry* load_gpt_partition_entry(FILE* disk, GPTHeader* gpt_header, int index) {
+	long long partitions_table_lba = gpt_header->partitions_table_lba;
+	assert_msg(index < gpt_header->partitions_table_length && index >= 0, "invalid partiton index");
+	GPTPartitionEntry* part = (GPTPartitionEntry*)malloc(sizeof(GPTPartitionEntry));
+	int nb_partition_per_sector = SECTOR_SIZE / gpt_header->partition_entry_size;
+	int sector_lba = gpt_header->partitions_table_lba + (index / nb_partition_per_sector);
+	byte sector[SECTOR_SIZE];
+	assert_msg(load_sector(disk, sector_lba, sector), "loading sector");
+	int offset = index % nb_partition_per_sector * gpt_header->partition_entry_size;
+	for (int i = 0; i < 16; ++i) part->guid_type[i] = sector[offset + i];
+	for (int i = 0; i < 16; ++i) part->guid[i] = sector[offset + 16 + i];
+	part->first_lba = cast_to_llong(sector[offset + 32]);
+	part->last_lba = cast_to_llong(sector[offset + 40]);
+	part->attr_flags = cast_to_llong(sector[offset + 48]);
+	for (int i = 0; i < 72; ++i) part->partition_name[i] = sector[offset + 56 + i];
+	return part;
 }
 
 void print_MBR_sector_info(MasterBootRecord* mbr) {
@@ -102,20 +127,11 @@ void print_MBR_sector_info(MasterBootRecord* mbr) {
 
 // load FAT32 VolumeID table informations using MBR data
 FAT32VolumeID* load_VolumeID_table(FILE* disk, MasterBootRecord* mbr) {
-	int partition_start_lda = mbr->entries[0].lba_begin;
+	int partition_start_lba = mbr->entries[0].lba_begin;
 	byte buffer[512];
-	int n;
-	n = fseek(disk, partition_start_lda * SECTOR_SIZE, SEEK_SET);
-	if (n != 0) {
-		printf("ERROR : failed to seek position %d\n", partition_start_lda * SECTOR_SIZE);
-		return NULL;
-	}
-	n = fread(buffer, 512, 1, disk);
-	if (n <= 0) {
-		printf("ERROR : failed to read characters from disk file\n");
-		return NULL;
-	}
+	assert_msg(load_sector(disk, partition_start_lba, buffer), "loading sector");
 	FAT32VolumeID* volume_id = (FAT32VolumeID*) malloc(sizeof(FAT32VolumeID));
+
 	volume_id->bytes_per_sector = *((short*)(buffer + 0xB));
 	volume_id->sectors_per_cluster = buffer[0xD];
 	volume_id->nb_reserved_sectors = *((short*)(buffer + 0xE));
@@ -125,7 +141,27 @@ FAT32VolumeID* load_VolumeID_table(FILE* disk, MasterBootRecord* mbr) {
 	volume_id->signature[0] = buffer[510];
 	volume_id->signature[1] = buffer[511];
 
-	volume_id->fat_begin_lba = partition_start_lda + volume_id->nb_reserved_sectors;
+	volume_id->fat_begin_lba = partition_start_lba + volume_id->nb_reserved_sectors;
+	volume_id->clusters_begin_lba = volume_id->fat_begin_lba + volume_id->nb_FAT_tables * volume_id->sectors_per_FAT;
+	return volume_id;
+}
+
+FAT32VolumeID* load_VolumeID_table_gpt(FILE* disk, GPTPartitionEntry* part_info) {
+	int partition_start_lba = part_info->first_lba;
+	byte buffer[512];
+	assert_msg(load_sector(disk, partition_start_lba, buffer), "loading sector");
+	FAT32VolumeID* volume_id = (FAT32VolumeID*) malloc(sizeof(FAT32VolumeID));
+
+	volume_id->bytes_per_sector = *((short*)(buffer + 0xB));
+	volume_id->sectors_per_cluster = buffer[0xD];
+	volume_id->nb_reserved_sectors = *((short*)(buffer + 0xE));
+	volume_id->nb_FAT_tables = buffer[0x10];
+	volume_id->sectors_per_FAT = *((int*)(buffer + 0x24));
+	volume_id->root_dir_first_cluster = *((int*)(buffer + 0x2c));
+	volume_id->signature[0] = buffer[510];
+	volume_id->signature[1] = buffer[511];
+
+	volume_id->fat_begin_lba = partition_start_lba + volume_id->nb_reserved_sectors;
 	volume_id->clusters_begin_lba = volume_id->fat_begin_lba + volume_id->nb_FAT_tables * volume_id->sectors_per_FAT;
 	return volume_id;
 }
@@ -230,24 +266,15 @@ void print_dir_record(Directory_Record* entry) {
 // *nb_clusters will hold the number of the clusters in the chaine
 // the 4 ignored MSB of 32bits FAT entries are handled here 
 void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster_number, int* cluster_numbers, int* nb_cluster) {
-	int n;
 	int current_fat_entry_offset =  SECTOR_SIZE * volume_id->fat_begin_lba + FAT32_ENTRY_SIZE * (start_cluster_number);
 	int max_clusters_num = *nb_cluster;
 	int current_cluste_num = start_cluster_number;
 	*nb_cluster = 0;
 
 	byte sector_buffer[SECTOR_SIZE];
+	
 	int sector_lba = current_fat_entry_offset / SECTOR_SIZE;
-	n = fseek(disk, SECTOR_SIZE * sector_lba, SEEK_SET);
-	if (n != 0) {
-		printf("Error seeking position %d \n", SECTOR_SIZE * sector_lba);
-		exit(-1);
-	}
-	n = fread(sector_buffer, SECTOR_SIZE, 1, disk);
-	if (n <= 0) {
-		printf("Error reading from disk file.\n");
-		exit(-1);
-	}
+	assert_msg(load_sector(disk, sector_lba, sector_buffer), "loading sector");
 
 	for (int i = 0; i < max_clusters_num; ++i) {
 		cluster_numbers[*nb_cluster] = current_cluste_num;
@@ -259,16 +286,7 @@ void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster
 		current_fat_entry_offset = SECTOR_SIZE * volume_id->fat_begin_lba + FAT32_ENTRY_SIZE * current_cluste_num;
 		if (current_fat_entry_offset / SECTOR_SIZE != sector_lba) {
 			sector_lba = current_fat_entry_offset / SECTOR_SIZE;
-			n = fseek(disk, SECTOR_SIZE * sector_lba, SEEK_SET);
-			if (n != 0) {
-				printf("Error seeking position %d \n", SECTOR_SIZE * sector_lba);
-				exit(-1);
-			}
-			n = fread(sector_buffer, SECTOR_SIZE, 1, disk);
-			if (n <= 0) {
-				printf("Error reading from disk file.\n");
-				exit(-1);
-			}
+			assert_msg(load_sector(disk, sector_lba, sector_buffer), "loading sector");
 		}
 	}
 	return;
@@ -444,6 +462,10 @@ void load_subdirectory(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* node
 
 #define LINE_SIZE 32
 void print_sector(int lba_adr, byte* buffer) {
+	int offset = 9;
+	for (int i = 0; i < offset; ++i) printf(" ");
+	for (int i = 0; i < LINE_SIZE; ++i) printf("%.2X ", i);
+	printf("\n");
 	for (int i = 0; i < SECTOR_SIZE; ++i) {
 		if (i % LINE_SIZE == 0) printf("%.8X ", lba_adr * SECTOR_SIZE + i);
 		printf("%.2X ", buffer[i]);
@@ -453,4 +475,12 @@ void print_sector(int lba_adr, byte* buffer) {
 
 void delete_file(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* curent_dir, int file_num) {
 	Directory_Record* file_record = curent_dir->files_records[file_num];
+}
+
+bool is_fat32_partition(PartitionEntry* partition) {
+	return partition->type == FAT32_ID;
+}
+
+bool is_using_gpt(MasterBootRecord* mbr) {
+	return mbr->entries[0].type == GPT_ID;
 }
