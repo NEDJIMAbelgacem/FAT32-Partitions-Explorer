@@ -1,4 +1,5 @@
 .vscode/
 bin/*
+sudo_vscode/
 *.[Oo]bj
 *.exe

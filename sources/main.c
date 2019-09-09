@@ -61,10 +61,10 @@ int main(int argc, char* argv[]) {
 	strcpy(disk_path + 5, disk_names[selected_disk_index - 1]);
 	printf("Opening %s \n", disk_path);
 	disk = fopen(disk_path, "r+b");
-	assert_msg(disk != NULL, "openning disk");
+	assert(disk != NULL, "openning disk");
 	MasterBootRecord* mbr = load_MBR_sector(disk);
 	byte sector_buffer[SECTOR_SIZE];
-	assert_msg(load_sector(disk, 0, sector_buffer), "loading sector");
+	assert(load_sector(disk, 0, sector_buffer), "loading sector");
 	FAT32VolumeID* volume_id = load_VolumeID(disk, mbr);
 	if (volume_id == NULL) {
 		printf("Failed to load Volume ID table \n");
@@ -108,7 +108,7 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			wait();
 			break;
-		case 3:
+		case 3: 
 			printf("=====================================================\n");
 			printf("Printing current directory records info\n");
 			printf("=====================================================\n");
@@ -117,7 +117,7 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			wait();
 			break;
-		case 4:
+		case 4: // List current directory subdirectories
 			printf("=====================================================\n");
 			printf("Printing current directory subdirectories names\n");
 			printf("=====================================================\n");
@@ -131,7 +131,7 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			wait();
 			break;
-		case 5:
+		case 5: // List current directory files
 			printf("=====================================================\n");
 			printf("Printing current directory files names\n");
 			printf("=====================================================\n");
@@ -145,10 +145,10 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			wait();
 			break;
-		case 6:
+		case 6: // navigate to parent directory
 			current_node = current_node->parent;
 			break;
-		case 7:
+		case 7: // navigate to subdirectory
 			printf("=====================================================\n");
 			printf("Printing current directory subdirectories names\n");
 			printf("=====================================================\n");
@@ -165,7 +165,7 @@ int main(int argc, char* argv[]) {
 			if (subdir_num < current_node->nb_subdirectories) current_node = current_node->directories_nodes[subdir_num];
 			printf("=====================================================\n");
 			break;
-		case 8:
+		case 8: // Print sector data
 			printf("=====================================================\n");
 			printf("Printing sector data \n");
 			printf("=====================================================\n");

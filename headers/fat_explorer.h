@@ -34,6 +34,7 @@
 #define FAT32_IS_VOLUME_LABEL(attr) ((attr) & 0x8)
 #define FAT32_IS_SUBDIRECTORY(attr) ((attr) & 0x10)
 #define FAT32_IS_ARCHIVE(attr) ((attr) & 0x20)
+#define LFN_SEQ_NUM(attr) ((attr) & 0x1F)
 
 #define FAT32_ATTR_LONG_FILENAME_MASK 0x3F
 #define FAT32_IS_LONG_FILENAME(attr) (((attr) & 0x3F) == 0xF)
@@ -238,10 +239,11 @@ void delete_file(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* curent_dir
 bool is_fat32_partition(PartitionEntry* partition);
 bool is_using_gpt(MasterBootRecord* mbr);
 
-#define assert(expr) if(!(expr)) { \
-	printf("Error : at %s:%d \n", __FILE__, __LINE__); \
+#define assert(expr, msg) if(!(expr)) { \
+	printf("Error : %s, at %s:%d \n", msg, __FILE__, __LINE__); \
+	exit(-1); \
 }
 
-#define assert_msg(expr, str) if(!(expr)) { \
-	printf("Error : %s, at %s:%d \n", str, __FILE__, __LINE__); \
+#define silent_assert(expr, msg) if(!(expr)) { \
+	printf("Warning : %s, at %s:%d \n", msg, __FILE__, __LINE__); \
 }

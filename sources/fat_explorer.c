@@ -52,11 +52,10 @@ bool load_sector(FILE* disk, int lba_adr, byte* sector) {
 	return true;
 }
 
-// TODO : handle the first 446 bytes of MBR sector 
 // disk file should be open
 MasterBootRecord* load_MBR_sector(FILE* disk) {
 	byte buffer[512];
-	assert_msg(load_sector(disk, 0, buffer), "loading MBR");
+	assert(load_sector(disk, 0, buffer), "loading MBR");
 	MasterBootRecord* mbr = (MasterBootRecord*)malloc(1 * sizeof(MasterBootRecord));
 	for (int i = 0; i < 4; ++i) {
 		int offset = PARTITION_MBR_OFFSET + 16 * i;
@@ -66,7 +65,6 @@ MasterBootRecord* load_MBR_sector(FILE* disk) {
 		for (int j = 0; j < 3; ++j) mbr->entries[i].chs_end[j] = buffer[offset + 5 + j];
 		mbr->entries[i].lba_begin = *((unsigned int*)(buffer + offset + 8));
 		mbr->entries[i].nb_sectors = *((unsigned int*)(buffer + offset + 12));
-		printf("%d\n", mbr->entries[i].nb_sectors);
 	}
 	mbr->signature[0] = buffer[510];
 	mbr->signature[1] = buffer[511];
@@ -75,7 +73,7 @@ MasterBootRecord* load_MBR_sector(FILE* disk) {
 
 GPTHeader* load_GPT_header(FILE* disk) {
 	byte buffer[512];
-	assert_msg(load_sector(disk, 1, buffer), "loading GPT");
+	assert(load_sector(disk, 1, buffer), "loading GPT");
 	GPTHeader* gpt = (GPTHeader*)malloc(sizeof(GPTHeader));
 	for (int i = 0; i < 8; ++i) gpt->signature[i] = buffer[i];
 	for (int i = 0; i < 4; ++i) gpt->version[i] = buffer[8 + i];
@@ -95,12 +93,12 @@ GPTHeader* load_GPT_header(FILE* disk) {
 
 GPTPartitionEntry* load_gpt_partition_entry(FILE* disk, GPTHeader* gpt_header, int index) {
 	long long partitions_table_lba = gpt_header->partitions_table_lba;
-	assert_msg(index < gpt_header->partitions_table_length && index >= 0, "invalid partiton index");
+	assert(index < gpt_header->partitions_table_length && index >= 0, "invalid partiton index");
 	GPTPartitionEntry* part = (GPTPartitionEntry*)malloc(sizeof(GPTPartitionEntry));
 	int nb_partition_per_sector = SECTOR_SIZE / gpt_header->partition_entry_size;
 	int sector_lba = gpt_header->partitions_table_lba + (index / nb_partition_per_sector);
 	byte sector[SECTOR_SIZE];
-	assert_msg(load_sector(disk, sector_lba, sector), "loading sector");
+	assert(load_sector(disk, sector_lba, sector), "loading sector");
 	int offset = index % nb_partition_per_sector * gpt_header->partition_entry_size;
 	for (int i = 0; i < 16; ++i) part->guid_type[i] = sector[offset + i];
 	for (int i = 0; i < 16; ++i) part->guid[i] = sector[offset + 16 + i];
@@ -111,25 +109,11 @@ GPTPartitionEntry* load_gpt_partition_entry(FILE* disk, GPTHeader* gpt_header, i
 	return part;
 }
 
-void print_MBR_sector_info(MasterBootRecord* mbr) {
-	printf("MBR signature : %x%x\n", mbr->signature[0], mbr->signature[1]);
-	for (int i = 0; i < 4; ++i) {
-		printf("========================================================================================\n");
-		printf("Partition : %d \n", i);
-		PartitionEntry* partition = &mbr->entries[i];
-		printf("sectors count : %d \n", partition->nb_sectors);
-		printf("partition size : %f Gb \n", ((double)partition->nb_sectors) / 2048 / 1024);
-		printf("Partition LBA begin address : %d \n", partition->lba_begin);
-		printf("partition state : %x \n", partition->state);
-		printf("Partition type : %x \n", partition->type);
-	}
-}
-
 // load FAT32 VolumeID table informations using MBR data
 FAT32VolumeID* load_VolumeID_table(FILE* disk, MasterBootRecord* mbr) {
 	int partition_start_lba = mbr->entries[0].lba_begin;
 	byte buffer[512];
-	assert_msg(load_sector(disk, partition_start_lba, buffer), "loading sector");
+	assert(load_sector(disk, partition_start_lba, buffer), "loading sector");
 	FAT32VolumeID* volume_id = (FAT32VolumeID*) malloc(sizeof(FAT32VolumeID));
 
 	volume_id->bytes_per_sector = *((short*)(buffer + 0xB));
@@ -149,7 +133,7 @@ FAT32VolumeID* load_VolumeID_table(FILE* disk, MasterBootRecord* mbr) {
 FAT32VolumeID* load_VolumeID_table_gpt(FILE* disk, GPTPartitionEntry* part_info) {
 	int partition_start_lba = part_info->first_lba;
 	byte buffer[512];
-	assert_msg(load_sector(disk, partition_start_lba, buffer), "loading sector");
+	assert(load_sector(disk, partition_start_lba, buffer), "loading sector");
 	FAT32VolumeID* volume_id = (FAT32VolumeID*) malloc(sizeof(FAT32VolumeID));
 
 	volume_id->bytes_per_sector = *((short*)(buffer + 0xB));
@@ -166,20 +150,6 @@ FAT32VolumeID* load_VolumeID_table_gpt(FILE* disk, GPTPartitionEntry* part_info)
 	return volume_id;
 }
 
-void print_FAT32_volume_id(FAT32VolumeID* volume_id) {
-	printf("========================================================================================\n");
-	printf("Displaying VolumeID informations\n");
-	printf("Bytes per sector : %d\n", volume_id->bytes_per_sector);
-	printf("Sectors per cluster : %d \n", volume_id->sectors_per_cluster);
-	printf("Number of reserved sectors : %d \n", volume_id->nb_reserved_sectors);
-	printf("Number of FAT tables : %d \n", volume_id->nb_FAT_tables);
-	printf("Sectors per FAT table : %d \n", volume_id->sectors_per_FAT);
-	printf("Root Directory First Cluster : %d \n", volume_id->root_dir_first_cluster);
-	printf("FAT beginning LBA : %ld \n", volume_id->fat_begin_lba);
-	printf("Clusters begin LBA : %ld \n", volume_id->clusters_begin_lba);
-	printf("Signature : %x%x\n", volume_id->signature[0], volume_id->signature[1]);
-}
-
 void read_time(byte* ptr, short time[3]) {
 	short* t = (short*)ptr;
 	time[2] = (*t << 1) & 0x3f;
@@ -187,11 +157,11 @@ void read_time(byte* ptr, short time[3]) {
 	time[0] = (*t >> 11) & 0x1f;
 }
 
-void read_date(byte* ptr, short time[3]) {
+void read_date(byte* ptr, short date[3]) {
 	short* d = (short*)ptr;
-	time[2] = 1980 + (*d >> 9) & 0x7f;
-	time[1] = (*d >> 5) & 0x1f;
-	time[0] = (*d) & 0xf;
+	date[2] = 1980 + (*d >> 9) & 0x7f;
+	date[1] = (*d >> 5) & 0x1f;
+	date[0] = (*d) & 0xf;
 }
 
 Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
@@ -207,6 +177,7 @@ Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
 		printf("ERROR : reading long filename entry as a normal directory record \n");
 		return NULL;
 	}
+	if (buffer[0] == 0x05) buffer[0] = 0xE5;
 	Directory_Entry* directory_record = (Directory_Entry*) malloc(sizeof(Directory_Entry));
 	for (int i = 0; i < 8; ++i) directory_record->filename[i] = buffer[i];
 	for (int i = 0; i < 3; ++i) directory_record->filename_extension[i] = buffer[8 + i];
@@ -235,30 +206,13 @@ LFN_Directory_Entry* read_long_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE])
 	}
 	LFN_Directory_Entry* entry = (LFN_Directory_Entry*) malloc(sizeof(LFN_Directory_Entry));
 	for (int i = 0; i < 13; ++i) entry->file_name_part[i] = L'\0';
-	entry->sequence_number = buffer[0];
+	entry->sequence_number = LFN_SEQ_NUM(buffer[0]);
 	entry->file_attribs = buffer[11];
 	entry->SFN_entry_checksum = buffer[13];
 	for (int i = 0; i < 5; ++i) entry->file_name_part[i] = cast_utf16(*(char16_t*)(buffer + 1 + 2 * i));
 	for (int i = 5; i < 11; ++i) entry->file_name_part[i] = cast_utf16(*(char16_t*)(buffer + 4 + 2 * i));
 	for (int i = 11; i < 13; ++i) entry->file_name_part[i] = cast_utf16(*(char16_t*)(buffer + 6 + 2 * i));
 	return entry;
-}
-
-void print_dir_record(Directory_Record* entry) {
-	printf("========================================================================================\n");
-	printf("Short file name : %s \n", entry->short_file_name);
-	printf("Long file name : %ls \n", entry->long_file_name);
-	printf("File size : %d bytes \n", entry->file_size);
-	printf("File attributes : %x \n", entry->file_attribs);
-	printf("Starting cluster number : %d \n", entry->starting_cluster_num);
-	printf("Is directory : %d \n", FAT32_IS_SUBDIRECTORY(entry->file_attribs) ? 1 : 0);
-	printf("Number of LFN entries : %d \n", entry->nb_LFN_entries);
-	printf("last write date : %d-%d-%d \n", entry->last_write_date[0], entry->last_write_date[1], entry->last_write_date[2]);
-	printf("last write time : %d:%d:%d \n", entry->last_write_time[0], entry->last_write_time[1], entry->last_write_time[2]);
-	printf("last access date : %d-%d-%d \n", entry->last_access_date[0], entry->last_access_date[1], entry->last_access_date[2]);
-	printf("creation date : %d-%d-%d \n", entry->creation_date[0], entry->creation_date[1], entry->creation_date[2]);
-	printf("creation time : %d:%d:%d \n", entry->creation_time[0], entry->creation_time[1], entry->creation_time[2]);
-	printf("========================================================================================\n");
 }
 
 // *nb_clusters is the maximum length of the cluster chain
@@ -274,7 +228,7 @@ void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster
 	byte sector_buffer[SECTOR_SIZE];
 	
 	int sector_lba = current_fat_entry_offset / SECTOR_SIZE;
-	assert_msg(load_sector(disk, sector_lba, sector_buffer), "loading sector");
+	assert(load_sector(disk, sector_lba, sector_buffer), "loading sector");
 
 	for (int i = 0; i < max_clusters_num; ++i) {
 		cluster_numbers[*nb_cluster] = current_cluste_num;
@@ -286,7 +240,7 @@ void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster
 		current_fat_entry_offset = SECTOR_SIZE * volume_id->fat_begin_lba + FAT32_ENTRY_SIZE * current_cluste_num;
 		if (current_fat_entry_offset / SECTOR_SIZE != sector_lba) {
 			sector_lba = current_fat_entry_offset / SECTOR_SIZE;
-			assert_msg(load_sector(disk, sector_lba, sector_buffer), "loading sector");
+			assert(load_sector(disk, sector_lba, sector_buffer), "loading sector");
 		}
 	}
 	return;
@@ -312,6 +266,17 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 	byte* clusters_buffer = (byte*) malloc(cluster_size * cluster_chain_len * sizeof(byte));
 	// load all clusters
 	for (int i = 0; i < cluster_chain_len; ++i) load_cluster(disk, volume_id, cluster_chain[i], clusters_buffer + i * cluster_size);
+	// 822431
+	// if (cluster_chain[0] == 822431) {
+	// 	for (int i = 0; i < cluster_chain_len; ++i) {
+	// 		for (int j = 0; j < volume_id->sectors_per_cluster; ++j) {
+	// 			byte sector[512];
+	// 			load_sector(disk, volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_chain[i] - 2) + j, sector);
+	// 			print_sector(volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_chain[i] - 2) + j, sector);
+	// 			getchar();getchar();
+	// 		}
+	// 	}
+	// }
 	// initialise pending lfn entries
 	LFN_Directory_Entry* pending_lfn_entries[20];
 	for (int i = 0; i < 20; ++i) pending_lfn_entries[i] = NULL;
@@ -322,75 +287,83 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 	int nb_sfn_entries = 0;
 	int record_offset_limit = cluster_size * cluster_chain_len;
 	for (int record_offset = 0; record_offset < record_offset_limit; record_offset += 32) {
-		if (clusters_buffer[record_offset] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER) continue;
-		if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) break;;
+		// if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]) ||
+		// 	 !FAT32_IS_LFN_LAST_LONG_ENTRY(clusters_buffer[record_offset + 11])) continue;
 		// passes if : is not a LFN or if its the last LFN
-		// it is possible that the first entry is short (like volume label and backward compatibility with DOS stuff which doesn't have LFN)
+		// it is possible that the first entry is short (like volume label and backward compatibility with LFN-less FAT)
 		// if the first entry is SFN there won't be any reading of LFN entries
 		// if the first entry is LFN one and it's the last sequence (masking its attributes with 0x40 yields true)
 		// 		then fetch all next entries untill SFN entry is found 
 		bool is_lfn = FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]);
 		bool is_last_lfn = is_lfn && FAT32_IS_LFN_LAST_LONG_ENTRY(clusters_buffer[record_offset]);
-		if (is_lfn && !is_last_lfn) {
-			printf("Warning : Skipped long entry out of place \n");
-			continue;
-		}
-		lfn_entries_count = 0;
-		while (record_offset < record_offset_limit && FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) {
+		// if (is_lfn && !is_last_lfn) {
+		// 	printf("Warning : Skipped long entry out of place \n");
+		// 	continue;
+		// }
+		lfn_entries_count = 1;
+		if (pending_lfn_entries[0] != NULL) free(pending_lfn_entries[0]);
+		pending_lfn_entries[0] = read_long_filename_entry(clusters_buffer + record_offset);
+		if (pending_lfn_entries[0] == NULL) continue;
+		record_offset += 32;
+
+		int nb_entries = pending_lfn_entries[0]->sequence_number;
+		for (int i = 0; i < nb_entries - 1 && record_offset < record_offset_limit; ++i) {
+			if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) break;
 			if (pending_lfn_entries[lfn_entries_count] != NULL) free(pending_lfn_entries[lfn_entries_count]);
-			pending_lfn_entries[lfn_entries_count] = read_long_filename_entry(clusters_buffer + record_offset);
-			lfn_entries_count++;
+			pending_lfn_entries[lfn_entries_count++] = read_long_filename_entry(clusters_buffer + record_offset);
+			if (pending_lfn_entries[lfn_entries_count - 1] == NULL) break;
+			if (pending_lfn_entries[lfn_entries_count - 1]->sequence_number != nb_entries - i - 1) break;
 			record_offset += 32;
 		}
-		if (record_offset >= record_offset_limit) {
-			printf("Warning : exceeded record offset (you should implement this shit to span over clusters you dump :)\n");
-			break;
-		}
+		if (nb_entries != lfn_entries_count) continue;
 
-		if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) {
-			Directory_Record* dir_record = init_directory_record();
-			// load data from SFN entry
-			Directory_Entry* sfn_entry = read_short_filename_entry(clusters_buffer + record_offset);
-			dir_record->file_attribs = sfn_entry->file_attribs;
-			dir_record->starting_cluster_num = sfn_entry->starting_cluster_num;
-			for (int j = 0; j < 3; ++j) {
-				dir_record->last_access_date[j] = sfn_entry->last_access_date[j];
-				dir_record->last_write_date[j] = sfn_entry->last_write_date[j];
-				dir_record->last_write_time[j] = sfn_entry->last_write_time[j];
-				dir_record->creation_date[j] = sfn_entry->creation_date[j];
-				dir_record->creation_time[j] = sfn_entry->creation_time[j];
-			}
-			dir_record->file_size = sfn_entry->file_size;
-			for (int j = 0; j < 8; ++j) dir_record->short_file_name[j] = sfn_entry->filename[j];
-			dir_record->short_file_name[8] = '.';
-			for (int j = 0; j < 3; ++j) dir_record->short_file_name[9 + j] = sfn_entry->filename_extension[j];
-			dir_record->short_file_name[12] = '\0';
-			dir_record->is_directory = FAT32_IS_SUBDIRECTORY(dir_record->file_attribs);
-			dir_record->cluster_offset = record_offset % cluster_size;
-			dir_record->cluster_num = cluster_chain[record_offset / cluster_size];
-			byte sfn_checksum = create_sum(sfn_entry);
-			free(sfn_entry);
-			//
-
-			dir_record->nb_LFN_entries = lfn_entries_count;
-			for (int i = 0; i < lfn_entries_count; ++i) {
-				if (pending_lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
-					printf("Warning : skipped LFN entry with unvalid checksum \n");
-					dir_record->nb_LFN_entries--;
-					continue;
-				}
-				int seq_number = pending_lfn_entries[i]->sequence_number & (~0x40);
-				for (int j = 0; j < 13; ++j) {
-					dir_record->long_file_name[13 * (seq_number - 1) + j] = pending_lfn_entries[i]->file_name_part[j];
-				}
-			}
-			directory_records[(*directory_records_size)++] = dir_record;
+		if (FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) continue;
+		if (clusters_buffer[record_offset] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER) continue;
+		
+		Directory_Record* dir_record = init_directory_record();
+		// load data from SFN entry
+		Directory_Entry* sfn_entry = read_short_filename_entry(clusters_buffer + record_offset);
+		dir_record->file_attribs = sfn_entry->file_attribs;
+		dir_record->starting_cluster_num = sfn_entry->starting_cluster_num;
+		for (int j = 0; j < 3; ++j) {
+			dir_record->last_access_date[j] = sfn_entry->last_access_date[j];
+			dir_record->last_write_date[j] = sfn_entry->last_write_date[j];
+			dir_record->last_write_time[j] = sfn_entry->last_write_time[j];
+			dir_record->creation_date[j] = sfn_entry->creation_date[j];
+			dir_record->creation_time[j] = sfn_entry->creation_time[j];
 		}
+		dir_record->file_size = sfn_entry->file_size;
+		for (int j = 0; j < 8; ++j) dir_record->short_file_name[j] = sfn_entry->filename[j];
+		dir_record->short_file_name[8] = '.';
+		for (int j = 0; j < 3; ++j) dir_record->short_file_name[9 + j] = sfn_entry->filename_extension[j];
+		dir_record->short_file_name[12] = '\0';
+		dir_record->is_directory = FAT32_IS_SUBDIRECTORY(dir_record->file_attribs);
+		dir_record->cluster_offset = record_offset % cluster_size;
+		dir_record->cluster_num = cluster_chain[record_offset / cluster_size];
+		byte sfn_checksum = create_sum(sfn_entry);
+		free(sfn_entry);
+		//
+
+		dir_record->nb_LFN_entries = lfn_entries_count;
+		for (int i = 0; i < lfn_entries_count; ++i) {
+			if (pending_lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
+				printf("Warning : skipped LFN entry with unvalid checksum \n");
+				dir_record->nb_LFN_entries--;
+				continue;
+			}
+			int seq_number = pending_lfn_entries[i]->sequence_number;
+			for (int j = 0; j < 13; ++j) {
+				dir_record->long_file_name[13 * (seq_number - 1) + j] = pending_lfn_entries[i]->file_name_part[j];
+			}
+		}
+		directory_records[(*directory_records_size)++] = dir_record;
+		// if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) break;
 	}
 	for (int i = 0; i < 20; ++i) {
 		if (pending_lfn_entries[i] != NULL) free(pending_lfn_entries[i]);
 	}
 	for (int i = 0; i < cluster_chain_len; ++i) free(clusters_buffer + i * (SECTOR_SIZE * volume_id->sectors_per_cluster));
+	
 }
 
 FileSystem_Node* init_FAT32_filesystem_node() {
@@ -460,6 +433,36 @@ void load_subdirectory(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* node
 	}
 }
 
+void delete_file(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* curent_dir, int file_num) {
+	Directory_Record* file_record = curent_dir->files_records[file_num];
+}
+
+bool is_fat32_partition(PartitionEntry* partition) {
+	return partition->type == FAT32_ID;
+}
+
+bool is_using_gpt(MasterBootRecord* mbr) {
+	return mbr->entries[0].type == GPT_ID;
+}
+
+// printing functions
+void print_dir_record(Directory_Record* entry) {
+	printf("========================================================================================\n");
+	printf("Short file name : %s \n", entry->short_file_name);
+	printf("Long file name : %ls \n", entry->long_file_name);
+	printf("File size : %d bytes \n", entry->file_size);
+	printf("File attributes : %x \n", entry->file_attribs);
+	printf("Starting cluster number : %d \n", entry->starting_cluster_num);
+	printf("Is directory : %d \n", FAT32_IS_SUBDIRECTORY(entry->file_attribs) ? 1 : 0);
+	printf("Number of LFN entries : %d \n", entry->nb_LFN_entries);
+	printf("last write date : %d-%d-%d \n", entry->last_write_date[0], entry->last_write_date[1], entry->last_write_date[2]);
+	printf("last write time : %d:%d:%d \n", entry->last_write_time[0], entry->last_write_time[1], entry->last_write_time[2]);
+	printf("last access date : %d-%d-%d \n", entry->last_access_date[0], entry->last_access_date[1], entry->last_access_date[2]);
+	printf("creation date : %d-%d-%d \n", entry->creation_date[0], entry->creation_date[1], entry->creation_date[2]);
+	printf("creation time : %d:%d:%d \n", entry->creation_time[0], entry->creation_time[1], entry->creation_time[2]);
+	printf("========================================================================================\n");
+}
+
 #define LINE_SIZE 32
 void print_sector(int lba_adr, byte* buffer) {
 	int offset = 9;
@@ -473,14 +476,30 @@ void print_sector(int lba_adr, byte* buffer) {
 	}
 }
 
-void delete_file(FAT32_FileSystem_Handle* fs_handle, FileSystem_Node* curent_dir, int file_num) {
-	Directory_Record* file_record = curent_dir->files_records[file_num];
+void print_MBR_sector_info(MasterBootRecord* mbr) {
+	printf("MBR signature : %x%x\n", mbr->signature[0], mbr->signature[1]);
+	for (int i = 0; i < 4; ++i) {
+		printf("========================================================================================\n");
+		printf("Partition : %d \n", i);
+		PartitionEntry* partition = &mbr->entries[i];
+		printf("sectors count : %d \n", partition->nb_sectors);
+		printf("partition size : %f Gb \n", ((double)partition->nb_sectors) / 2048 / 1024);
+		printf("Partition LBA begin address : %d \n", partition->lba_begin);
+		printf("partition state : %x \n", partition->state);
+		printf("Partition type : %x \n", partition->type);
+	}
 }
 
-bool is_fat32_partition(PartitionEntry* partition) {
-	return partition->type == FAT32_ID;
-}
-
-bool is_using_gpt(MasterBootRecord* mbr) {
-	return mbr->entries[0].type == GPT_ID;
+void print_FAT32_volume_id(FAT32VolumeID* volume_id) {
+	printf("========================================================================================\n");
+	printf("Displaying VolumeID informations\n");
+	printf("Bytes per sector : %d\n", volume_id->bytes_per_sector);
+	printf("Sectors per cluster : %d \n", volume_id->sectors_per_cluster);
+	printf("Number of reserved sectors : %d \n", volume_id->nb_reserved_sectors);
+	printf("Number of FAT tables : %d \n", volume_id->nb_FAT_tables);
+	printf("Sectors per FAT table : %d \n", volume_id->sectors_per_FAT);
+	printf("Root Directory First Cluster : %d \n", volume_id->root_dir_first_cluster);
+	printf("FAT beginning LBA : %ld \n", volume_id->fat_begin_lba);
+	printf("Clusters begin LBA : %ld \n", volume_id->clusters_begin_lba);
+	printf("Signature : %x%x\n", volume_id->signature[0], volume_id->signature[1]);
 }
