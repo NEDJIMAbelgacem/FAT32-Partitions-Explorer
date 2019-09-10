@@ -129,6 +129,7 @@ typedef struct SFN_Directory_Entry {
 } SFN_Directory_Entry;
 
 typedef struct LFN_Directory_Entry {
+	bool is_deleted;
 	byte sequence_number;
 	wchar_t file_name_part[13];
 	byte file_attribs;

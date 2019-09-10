@@ -5,7 +5,7 @@ Directory_Record* init_directory_record() {
 	record->has_long_file_name = false;
 	record->is_deleted_file = false;
 	for (int i = 0; i < 13; ++i) record->short_file_name[i] = '\0';
-	for (int i = 0; i < 260; ++i) record->long_file_name[i] = L'\0';
+	for (int i = 0; i < 260; ++i) record->long_file_name[i] = L' ';
 	return record;
 }
 
@@ -167,10 +167,6 @@ void read_date(byte* ptr, short date[3]) {
 }
 
 SFN_Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
-	if (buffer[0] == FAT32_DIRECTORY_RECORDS_END_MARKER) {
-		printf("ERROR : reading end record \n");
-		return NULL;
-	}
 	if (FAT32_IS_LONG_FILENAME(buffer[11])) {
 		printf("ERROR : reading long filename entry as a normal directory record \n");
 		return NULL;
@@ -207,6 +203,7 @@ LFN_Directory_Entry* read_long_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE])
 		return NULL;
 	}
 	LFN_Directory_Entry* entry = (LFN_Directory_Entry*) malloc(sizeof(LFN_Directory_Entry));
+	entry->is_deleted = buffer[0] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER;
 	for (int i = 0; i < 13; ++i) entry->file_name_part[i] = L'\0';
 	entry->sequence_number = LFN_SEQ_NUM(buffer[0]);
 	entry->file_attribs = buffer[11];
@@ -268,66 +265,31 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 	byte* clusters_buffer = (byte*) malloc(cluster_size * cluster_chain_len * sizeof(byte));
 	// load all clusters
 	for (int i = 0; i < cluster_chain_len; ++i) load_cluster(disk, volume_id, cluster_chain[i], clusters_buffer + i * cluster_size);
-	// 822431
-	// if (cluster_chain[0] == 822431) {
-	// 	for (int i = 0; i < cluster_chain_len; ++i) {
-	// 		for (int j = 0; j < volume_id->sectors_per_cluster; ++j) {
-	// 			byte sector[512];
-	// 			load_sector(disk, volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_chain[i] - 2) + j, sector);
-	// 			print_sector(volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_chain[i] - 2) + j, sector);
-	// 			getchar();getchar();
-	// 		}
-	// 	}
-	// }
+
 	// initialise pending lfn entries
-	LFN_Directory_Entry* pending_lfn_entries[20];
-	for (int i = 0; i < 20; ++i) pending_lfn_entries[i] = NULL;
+	LFN_Directory_Entry* lfn_entries[20];
+	for (int i = 0; i < 20; ++i) lfn_entries[i] = NULL;
 	int lfn_entries_count = 0;
 
 	*directory_records_size = 0;
 	// read directory records
-	int nb_sfn_entries = 0;
 	int record_offset_limit = cluster_size * cluster_chain_len;
 	for (int record_offset = 0; record_offset < record_offset_limit; record_offset += 32) {
-		// if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]) ||
-		// 	 !FAT32_IS_LFN_LAST_LONG_ENTRY(clusters_buffer[record_offset + 11])) continue;
-		// passes if : is not a LFN or if its the last LFN
-		// it is possible that the first entry is short (like volume label and backward compatibility with LFN-less FAT)
-		// if the first entry is SFN there won't be any reading of LFN entries
-		// if the first entry is LFN one and it's the last sequence (masking its attributes with 0x40 yields true)
-		// 		then fetch all next entries untill SFN entry is found 
 		bool is_lfn = FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]);
 		bool is_last_lfn = is_lfn && FAT32_IS_LFN_LAST_LONG_ENTRY(clusters_buffer[record_offset]);
 		// the last long file name entry should be first
-		if (is_lfn && !is_last_lfn) continue;
-		bool has_long_file_name = true;
-		if (is_lfn) {
-			if (pending_lfn_entries[0] != NULL) free(pending_lfn_entries[0]);
-			pending_lfn_entries[0] = read_long_filename_entry(clusters_buffer + record_offset);
-			if (pending_lfn_entries[0] == NULL) continue;
-			lfn_entries_count = 1;
-			record_offset += 32;
-
-			int nb_entries = pending_lfn_entries[0]->sequence_number;
-			for (int i = 0; i < nb_entries - 1 && record_offset < record_offset_limit; ++i) {
-				if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) break;
-				if (pending_lfn_entries[lfn_entries_count] != NULL) free(pending_lfn_entries[lfn_entries_count]);
-				pending_lfn_entries[lfn_entries_count++] = read_long_filename_entry(clusters_buffer + record_offset);
-				if (pending_lfn_entries[lfn_entries_count - 1] == NULL) break;
-				if (pending_lfn_entries[lfn_entries_count - 1]->sequence_number != nb_entries - i - 1) break;
-				record_offset += 32;
-			}
-			if (nb_entries != lfn_entries_count) {
-				has_long_file_name = false;
-			}
-		} else {
-			has_long_file_name = false;
+		// if (is_lfn && !is_last_lfn) continue;
+		lfn_entries_count = 0;
+		for (; record_offset < record_offset_limit && FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]); record_offset += 32) {
+			if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) break;
+			if (lfn_entries[lfn_entries_count] != NULL) free(lfn_entries[lfn_entries_count]);
+			lfn_entries[lfn_entries_count] = read_long_filename_entry(clusters_buffer + record_offset);
+			if (lfn_entries[lfn_entries_count] == NULL) continue;
+			lfn_entries_count++;
 		}
-
+		if (record_offset >= record_offset_limit || FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) continue;
 		if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) continue;
 		
-		if (FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) continue;
-
 		Directory_Record* dir_record = init_directory_record();
 
 		// load data from SFN entry
@@ -355,37 +317,46 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 		byte sfn_checksum = create_sum(sfn_entry);
 		free(sfn_entry);
 		//
-
-		if (has_long_file_name) {
-			dir_record->nb_LFN_entries = lfn_entries_count;
-			bool has_unvalid_checksum = false;
-			wchar_t long_file_name_str[260];
-			for (int i = 0; i < 260; ++i) long_file_name_str[i] = L'\0';
+		bool has_long_file_name = lfn_entries_count > 0;
+		if (dir_record->is_deleted_file) {
 			for (int i = 0; i < lfn_entries_count; ++i) {
-				if (pending_lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
-					printf("Warning : skipped LFN entry with unvalid checksum \n");
-					dir_record->nb_LFN_entries--;
-					has_unvalid_checksum = true;
-					break;
-				}
-				int seq_number = pending_lfn_entries[i]->sequence_number;
+				int seq_number = lfn_entries_count - i;
 				for (int j = 0; j < 13; ++j) {
-					long_file_name_str[13 * (seq_number - 1) + j] = pending_lfn_entries[i]->file_name_part[j];
+					dir_record->long_file_name[13 * (seq_number - 1) + j] = lfn_entries[i]->file_name_part[j];
 				}
 			}
-			if (has_unvalid_checksum) {
-				has_long_file_name = false;
-			} else {
-				for (int i = 0; i < 260; ++i) dir_record->long_file_name[i] = long_file_name_str[i];
+			has_long_file_name = true;
+		} else if (has_long_file_name) {
+			has_long_file_name = lfn_entries_count == lfn_entries[0]->sequence_number;
+			if (has_long_file_name) {
+				dir_record->nb_LFN_entries = lfn_entries_count;
+				bool has_unvalid_checksum = false;
+				wchar_t long_file_name_str[260];
+				for (int i = 0; i < 260; ++i) long_file_name_str[i] = L'\0';
+				for (int i = 0; i < lfn_entries_count; ++i) {
+					if (lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
+						printf("Warning : skipped LFN entry with unvalid checksum \n");
+						dir_record->nb_LFN_entries--;
+						has_unvalid_checksum = true;
+						break;
+					}
+					int seq_number = lfn_entries[i]->sequence_number;
+					for (int j = 0; j < 13; ++j) {
+						long_file_name_str[13 * (seq_number - 1) + j] = lfn_entries[i]->file_name_part[j];
+					}
+				}
+				if (has_unvalid_checksum) has_long_file_name = false;
+				else for (int i = 0; i < 260; ++i) dir_record->long_file_name[i] = long_file_name_str[i];
 			}
 		}
+
+		
 		dir_record->has_long_file_name = has_long_file_name;
 
 		directory_records[(*directory_records_size)++] = dir_record;
-		// if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) break;
 	}
 	for (int i = 0; i < 20; ++i) {
-		if (pending_lfn_entries[i] != NULL) free(pending_lfn_entries[i]);
+		if (lfn_entries[i] != NULL) free(lfn_entries[i]);
 	}
 	for (int i = 0; i < cluster_chain_len; ++i) free(clusters_buffer + i * (SECTOR_SIZE * volume_id->sectors_per_cluster));
 	

@@ -14,7 +14,7 @@
 
 // find currently availlable disks
 void probe_disks(char* disks[], int* nb_disks) {
-	system("ls /dev/ | grep sd.* > tmp");
+	system("ls /dev/ | grep [sh]d.$ > tmp");
 	FILE* tmp = fopen("tmp", "r");
 	int max_disks_count = *nb_disks, n = 1;
 	*nb_disks = 0;
@@ -65,14 +65,22 @@ int main(int argc, char* argv[]) {
 	disk = fopen(disk_path, "r+b");
 	assert(disk != NULL, "openning disk");
 	MasterBootRecord* mbr = load_MBR_sector(disk);
-	byte sector_buffer[SECTOR_SIZE];
-	assert(load_sector(disk, 0, sector_buffer), "loading sector");
-	FAT32VolumeID* volume_id = load_VolumeID(disk, mbr);
-	if (volume_id == NULL) {
-		printf("Failed to load Volume ID table \n");
-		exit(-1);
-	}
-	print_FAT32_volume_id(volume_id);
+	// byte sector_buffer[SECTOR_SIZE];
+	// assert(load_sector(disk, 0, sector_buffer), "loading MBR");
+	GPTHeader* gpt = NULL;
+	FAT32VolumeID* volume_id = NULL;
+	bool has_gpt = is_using_gpt(mbr);
+
+	if (has_gpt) {
+		gpt = load_GPT_header(disk);
+		// TODO : make it so I can read any partition
+		GPTPartitionEntry* partition_entry = load_gpt_partition_entry(disk, gpt, 0);
+		volume_id = load_VolumeID_table_gpt(disk, partition_entry);
+		free(partition_entry);
+	} else volume_id = load_VolumeID(disk, mbr);
+
+	assert(volume_id != NULL, "Failled to load FAT32 Volume ID table (aka Boot Sectoor) \n");
+	
 	FAT32_FileSystem_Handle* fs_handle = load_FAT32_filesystem_root(disk, volume_id);
 	FileSystem_Node* current_node = fs_handle->fs_node;
 	while (true) {
