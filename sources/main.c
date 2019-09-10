@@ -39,6 +39,8 @@ FAT32VolumeID* load_VolumeID(FILE* disk, MasterBootRecord* mbr) {
 }
 
 int main(int argc, char* argv[]) {
+	setlocale(LC_CTYPE,"UTF-16");
+
 	int cluster_num = 2;
 	if (argc > 1) cluster_num = atoi(argv[1]);
 	FILE* disk = NULL;
@@ -79,13 +81,13 @@ int main(int argc, char* argv[]) {
 		printf("Choose one of the commands below : \n");
 		printf("1 -> Print Master Boot Record of the current disk \n");
 		printf("2 -> Print the Boot Sector (aka volume ID) of the first partition in disk (FAT32) \n");
-		printf("3 -> Print all file name records informations of current directory (defaults to root) \n");
+		printf("3 -> Print file name records informations of a file or a subdirectory of the current directory \n");
 		printf("4 -> Print all subdirectories names of the current directory \n");
 		printf("5 -> Print all file names of the current directory \n");
 		printf("6 -> navigate to the parent directory \n");
 		printf("7 -> navigate to a subdirectory \n");
 		printf("8 -> Print sector data \n");
-		printf("9 -> Delete a file/directory \n");
+		printf("9 -> Print all deleted files of the current directory \n");
 		printf("99 -> exit \n");
 		int command, subdir_num, lba_adr;
 		byte sector_buffer[SECTOR_SIZE];
@@ -112,37 +114,63 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			printf("Printing current directory records info\n");
 			printf("=====================================================\n");
-			for (int i = 0; i < current_node->nb_subdirectories; ++i) print_dir_record(current_node->directories_records[i]);
-			for (int i = 0; i < current_node->nb_files; ++i) print_dir_record(current_node->files_records[i]);
-			printf("=====================================================\n");
+			{
+				printf("|-----|-------------------------------------|----------------|------| \n");
+				printf("| num | long name                           | short name     | type | \n");
+				printf("|-----|-------------------------------------|----------------|------| \n");
+
+				for (int i = 0; i < current_node->nb_subdirectories; ++i) {
+					printf("| %3.3d | %35.35ls | %14.14s | dir  | \n", i, current_node->directories_records[i]->long_file_name, 
+						current_node->directories_records[i]->short_file_name);
+					printf("|-----|-------------------------------------|----------------|------| \n");
+				}
+
+				for (int i = 0; i < current_node->nb_files; ++i) {
+					printf("| %3.3d | %35.35ls | %14.14s | file | \n", current_node->nb_subdirectories + i, current_node->files_records[i]->long_file_name, 
+						current_node->files_records[i]->short_file_name);
+					printf("|-----|-------------------------------------|----------------|------| \n");
+				}
+				int num;
+				printf("Input number : ");
+				scanf("%d", &num);
+				if (num >= 0) {
+					if (num < current_node->nb_subdirectories) {
+						print_dir_record(current_node->directories_records[num]);
+					} else if (num - current_node->nb_subdirectories < current_node->nb_files) {
+						print_dir_record(current_node->files_records[num - current_node->nb_subdirectories]);
+					}
+				}
+				printf("=====================================================\n");
+			}
 			wait();
 			break;
 		case 4: // List current directory subdirectories
 			printf("=====================================================\n");
 			printf("Printing current directory subdirectories names\n");
 			printf("=====================================================\n");
+			printf("|-------------------------------------|----------------| \n");
+			printf("| long name                           | short name     | \n");
+			printf("|-------------------------------------|----------------| \n");
 			for (int i = 0; i < current_node->nb_subdirectories; ++i) {
-				if (current_node->directories_records[i]->long_file_name[0] == 0) {
-					printf("%d (short file name) : %s \n", i, current_node->directories_records[i]->short_file_name);
-				} else {
-					printf("%d (long file name) : %ls \n", i, current_node->directories_records[i]->long_file_name);
-				}
+				printf("| %35.35ls | %14.14s | \n", current_node->directories_records[i]->long_file_name, 
+					current_node->directories_records[i]->short_file_name);
+				printf("|-------------------------------------|----------------| \n");
 			}
-			printf("=====================================================\n");
 			wait();
 			break;
 		case 5: // List current directory files
 			printf("=====================================================\n");
 			printf("Printing current directory files names\n");
 			printf("=====================================================\n");
+			printf("|-------------------------------------|----------------| \n");
+			printf("| long name                           | short name     | \n");
+			printf("|-------------------------------------|----------------| \n");
 			for (int i = 0; i < current_node->nb_files; ++i) {
-				if (current_node->files_records[i]->long_file_name[0] == 0) {
-					printf("%d (short file name) : %s \n", i, current_node->files_records[i]->short_file_name);
-				} else {
-					printf("%d (long file name) : %ls \n", i, current_node->files_records[i]->long_file_name);
-				}
+				if (current_node->files_records[i]->is_deleted_file) continue;
+				printf("| %35.35ls | %14.14s | \n", current_node->files_records[i]->long_file_name, 
+					current_node->files_records[i]->short_file_name);
+				printf("|-------------------------------------|----------------| \n");
 			}
-			printf("=====================================================\n");
 			wait();
 			break;
 		case 6: // navigate to parent directory
@@ -152,12 +180,13 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			printf("Printing current directory subdirectories names\n");
 			printf("=====================================================\n");
+			printf("|-----|-------------------------------------|----------------| \n");
+			printf("| num | long name                           | short name     | \n");
+			printf("|-----|-------------------------------------|----------------| \n");
 			for (int i = 0; i < current_node->nb_subdirectories; ++i) {
-				if (current_node->directories_records[i]->long_file_name[0] == 0) {
-					printf("%d (short directory file name) : %s\n", i, current_node->directories_records[i]->short_file_name);
-				} else {
-					printf("%d (long directory file name) : %ls\n", i, current_node->directories_records[i]->long_file_name);
-				}
+				printf("| %3.3d | %35.35ls | %14.14s | \n", i, current_node->directories_records[i]->long_file_name, 
+					current_node->directories_records[i]->short_file_name);
+				printf("|-----|-------------------------------------|----------------| \n");
 			}
 			printf("Input subdirectory number : ");
 			scanf("%d", &subdir_num);
@@ -176,14 +205,30 @@ int main(int argc, char* argv[]) {
 			printf("=====================================================\n");
 			wait();
 			break;
-		case 9:
-			// delete a file or directory
+		case 9: // display the list of current directory's deleted files
+			printf("=====================================================\n");
+			printf("Printing current directory deleted files \n");
+			printf("=====================================================\n");
+			printf("|-------------------------------------|----------------| \n");
+			printf("| long name                           | short name     | \n");
+			printf("|-------------------------------------|----------------| \n");
+			for (int i = 0; i < current_node->nb_files; ++i) {
+				if (!current_node->files_records[i]->is_deleted_file) continue;
+				printf("| %35.35ls | %14.14s | \n", current_node->files_records[i]->long_file_name, 
+					current_node->files_records[i]->short_file_name);
+				printf("|-------------------------------------|----------------| \n");
+			}
+			printf("=====================================================\n");
+			wait();
 			break;
 		case 10:
-			// display deleted files
-			break;
-		case 11:
-			// rename a file
+			for (int i = 0; i < volume_id->sectors_per_cluster; ++i)
+			{
+				byte sector[512];
+				load_sector(disk, volume_id->clusters_begin_lba + i, sector);
+				print_sector(volume_id->clusters_begin_lba + i, sector);
+			}
+			wait();
 			break;
 		default:
 			exit(0);

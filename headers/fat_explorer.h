@@ -52,7 +52,7 @@
 typedef struct PartitionEntry PartitionEntry;
 typedef struct MasterBootRecord MasterBootRecord;
 typedef struct FAT32VolumeID FAT32VolumeID;
-typedef struct Directory_Entry Directory_Entry;
+typedef struct SFN_Directory_Entry SFN_Directory_Entry;
 typedef struct FileSystem_Node FileSystem_Node;
 typedef struct LFN_Directory_Entry LFN_Directory_Entry;
 typedef struct Directory_Record Directory_Record;
@@ -113,7 +113,8 @@ typedef struct FAT32VolumeID {
 } FAT32VolumeID;
 
 // TODO : use unions to handle long file names entries
-typedef struct Directory_Entry {
+typedef struct SFN_Directory_Entry {
+	bool is_deleted;
 	char filename[8];
 	char filename_extension[3];
 	byte file_attribs;
@@ -125,7 +126,7 @@ typedef struct Directory_Entry {
 	short last_access_date[3];
 	short last_write_time[3];
 	short last_write_date[3];
-} Directory_Entry;
+} SFN_Directory_Entry;
 
 typedef struct LFN_Directory_Entry {
 	byte sequence_number;
@@ -136,7 +137,9 @@ typedef struct LFN_Directory_Entry {
 
 typedef struct Directory_Record {
 	byte short_file_name[13];
+	bool has_long_file_name;
 	wchar_t long_file_name[260];
+	bool is_deleted_file;
 	byte file_attribs;
 	int starting_cluster_num;
 	int file_size;
@@ -205,7 +208,7 @@ void read_time(byte* ptr, short time[3]);
 
 void read_date(byte* ptr, short time[3]);
 
-Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]);
+SFN_Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]);
 
 LFN_Directory_Entry* read_long_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]);
 
@@ -218,7 +221,7 @@ void print_dir_record(Directory_Record* entry);
 void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster_number, int* cluster_numbers, int* nb_cluster);
 
 // create SFN entry checksum
-byte create_sum(Directory_Entry* entry);
+byte create_sum(SFN_Directory_Entry* entry);
 
 // directory_records should be allocated previously and directory_records_size contains its size
 void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_cluster_number, Directory_Record** directory_records, int* directory_records_size);

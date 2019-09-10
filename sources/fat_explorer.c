@@ -2,6 +2,8 @@
 
 Directory_Record* init_directory_record() {
 	Directory_Record* record = (Directory_Record*) malloc(sizeof(Directory_Record));
+	record->has_long_file_name = false;
+	record->is_deleted_file = false;
 	for (int i = 0; i < 13; ++i) record->short_file_name[i] = '\0';
 	for (int i = 0; i < 260; ++i) record->long_file_name[i] = L'\0';
 	return record;
@@ -164,11 +166,7 @@ void read_date(byte* ptr, short date[3]) {
 	date[0] = (*d) & 0xf;
 }
 
-Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
-	if (buffer[0] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER) {
-		printf("ERROR : unused record \n");
-		return NULL;
-	}
+SFN_Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
 	if (buffer[0] == FAT32_DIRECTORY_RECORDS_END_MARKER) {
 		printf("ERROR : reading end record \n");
 		return NULL;
@@ -177,8 +175,11 @@ Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
 		printf("ERROR : reading long filename entry as a normal directory record \n");
 		return NULL;
 	}
-	if (buffer[0] == 0x05) buffer[0] = 0xE5;
-	Directory_Entry* directory_record = (Directory_Entry*) malloc(sizeof(Directory_Entry));
+
+	SFN_Directory_Entry* directory_record = (SFN_Directory_Entry*) malloc(sizeof(SFN_Directory_Entry));
+	
+	directory_record->is_deleted = buffer[0] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER;
+
 	for (int i = 0; i < 8; ++i) directory_record->filename[i] = buffer[i];
 	for (int i = 0; i < 3; ++i) directory_record->filename_extension[i] = buffer[8 + i];
 	directory_record->file_attribs = buffer[11];
@@ -195,12 +196,13 @@ Directory_Entry* read_short_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
 	starting_cluster_num[0] = buffer[26];
 	starting_cluster_num[1] = buffer[27];
 	directory_record->file_size = *((int*)(buffer + 28));
-
+	if (directory_record->filename[0] == 0x05) directory_record->filename[0] = 0xE5;
+	if (directory_record->is_deleted) directory_record->filename[0] = '?';
 	return directory_record;
 }
 
 LFN_Directory_Entry* read_long_filename_entry(byte buffer[DIRECTORY_ENTRY_SIZE]) {
-	if (buffer[12] != 0 || !FAT32_IS_LONG_FILENAME(buffer[11])/*  || buffer[26] != 0 || buffer[27] != 0*/) {
+	if (buffer[12] != 0 || !FAT32_IS_LONG_FILENAME(buffer[11]) || buffer[26] != 0 || buffer[27] != 0) {
 		printf("ERROR : invalid long filename entry \n");
 		return NULL;
 	}
@@ -247,7 +249,7 @@ void fetch_cluster_chain(FILE* disk, FAT32VolumeID* volume_id, int start_cluster
 }
 
 // create SFN entry checksum
-byte create_sum(Directory_Entry* entry) {
+byte create_sum(SFN_Directory_Entry* entry) {
     byte sum;
     for (int i = sum = 0; i < 8; i++) sum = (sum >> 1) + (sum << 7) + entry->filename[i];
 	for (int i = 0; i < 3; i++) sum = (sum >> 1) + (sum << 7) + entry->filename_extension[i];
@@ -296,33 +298,43 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 		// 		then fetch all next entries untill SFN entry is found 
 		bool is_lfn = FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11]);
 		bool is_last_lfn = is_lfn && FAT32_IS_LFN_LAST_LONG_ENTRY(clusters_buffer[record_offset]);
-		// if (is_lfn && !is_last_lfn) {
-		// 	printf("Warning : Skipped long entry out of place \n");
-		// 	continue;
-		// }
-		lfn_entries_count = 1;
-		if (pending_lfn_entries[0] != NULL) free(pending_lfn_entries[0]);
-		pending_lfn_entries[0] = read_long_filename_entry(clusters_buffer + record_offset);
-		if (pending_lfn_entries[0] == NULL) continue;
-		record_offset += 32;
-
-		int nb_entries = pending_lfn_entries[0]->sequence_number;
-		for (int i = 0; i < nb_entries - 1 && record_offset < record_offset_limit; ++i) {
-			if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) break;
-			if (pending_lfn_entries[lfn_entries_count] != NULL) free(pending_lfn_entries[lfn_entries_count]);
-			pending_lfn_entries[lfn_entries_count++] = read_long_filename_entry(clusters_buffer + record_offset);
-			if (pending_lfn_entries[lfn_entries_count - 1] == NULL) break;
-			if (pending_lfn_entries[lfn_entries_count - 1]->sequence_number != nb_entries - i - 1) break;
+		// the last long file name entry should be first
+		if (is_lfn && !is_last_lfn) continue;
+		bool has_long_file_name = true;
+		if (is_lfn) {
+			if (pending_lfn_entries[0] != NULL) free(pending_lfn_entries[0]);
+			pending_lfn_entries[0] = read_long_filename_entry(clusters_buffer + record_offset);
+			if (pending_lfn_entries[0] == NULL) continue;
+			lfn_entries_count = 1;
 			record_offset += 32;
-		}
-		if (nb_entries != lfn_entries_count) continue;
 
-		if (FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) continue;
-		if (clusters_buffer[record_offset] == FAT32_UNUSED_DIRECTORY_RECORD_MARKER) continue;
+			int nb_entries = pending_lfn_entries[0]->sequence_number;
+			for (int i = 0; i < nb_entries - 1 && record_offset < record_offset_limit; ++i) {
+				if (!FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) break;
+				if (pending_lfn_entries[lfn_entries_count] != NULL) free(pending_lfn_entries[lfn_entries_count]);
+				pending_lfn_entries[lfn_entries_count++] = read_long_filename_entry(clusters_buffer + record_offset);
+				if (pending_lfn_entries[lfn_entries_count - 1] == NULL) break;
+				if (pending_lfn_entries[lfn_entries_count - 1]->sequence_number != nb_entries - i - 1) break;
+				record_offset += 32;
+			}
+			if (nb_entries != lfn_entries_count) {
+				has_long_file_name = false;
+			}
+		} else {
+			has_long_file_name = false;
+		}
+
+		if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) continue;
 		
+		if (FAT32_IS_LONG_FILENAME(clusters_buffer[record_offset + 11])) continue;
+
 		Directory_Record* dir_record = init_directory_record();
+
 		// load data from SFN entry
-		Directory_Entry* sfn_entry = read_short_filename_entry(clusters_buffer + record_offset);
+		SFN_Directory_Entry* sfn_entry = read_short_filename_entry(clusters_buffer + record_offset);
+		if (sfn_entry == NULL) continue;
+		dir_record->is_deleted_file = sfn_entry->is_deleted;
+
 		dir_record->file_attribs = sfn_entry->file_attribs;
 		dir_record->starting_cluster_num = sfn_entry->starting_cluster_num;
 		for (int j = 0; j < 3; ++j) {
@@ -344,18 +356,31 @@ void fetch_directory_records(FILE* disk, FAT32VolumeID* volume_id, int start_clu
 		free(sfn_entry);
 		//
 
-		dir_record->nb_LFN_entries = lfn_entries_count;
-		for (int i = 0; i < lfn_entries_count; ++i) {
-			if (pending_lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
-				printf("Warning : skipped LFN entry with unvalid checksum \n");
-				dir_record->nb_LFN_entries--;
-				continue;
+		if (has_long_file_name) {
+			dir_record->nb_LFN_entries = lfn_entries_count;
+			bool has_unvalid_checksum = false;
+			wchar_t long_file_name_str[260];
+			for (int i = 0; i < 260; ++i) long_file_name_str[i] = L'\0';
+			for (int i = 0; i < lfn_entries_count; ++i) {
+				if (pending_lfn_entries[i]->SFN_entry_checksum != sfn_checksum) {
+					printf("Warning : skipped LFN entry with unvalid checksum \n");
+					dir_record->nb_LFN_entries--;
+					has_unvalid_checksum = true;
+					break;
+				}
+				int seq_number = pending_lfn_entries[i]->sequence_number;
+				for (int j = 0; j < 13; ++j) {
+					long_file_name_str[13 * (seq_number - 1) + j] = pending_lfn_entries[i]->file_name_part[j];
+				}
 			}
-			int seq_number = pending_lfn_entries[i]->sequence_number;
-			for (int j = 0; j < 13; ++j) {
-				dir_record->long_file_name[13 * (seq_number - 1) + j] = pending_lfn_entries[i]->file_name_part[j];
+			if (has_unvalid_checksum) {
+				has_long_file_name = false;
+			} else {
+				for (int i = 0; i < 260; ++i) dir_record->long_file_name[i] = long_file_name_str[i];
 			}
 		}
+		dir_record->has_long_file_name = has_long_file_name;
+
 		directory_records[(*directory_records_size)++] = dir_record;
 		// if (clusters_buffer[record_offset] == FAT32_DIRECTORY_RECORDS_END_MARKER) break;
 	}
