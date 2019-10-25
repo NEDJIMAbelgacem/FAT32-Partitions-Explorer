@@ -21,7 +21,7 @@ void convert_utf16_to_wchar(byte* str, int str_len, wchar_t* w_str, int* wstr_le
 	}
 }
 
-// cluster pointer should e pointing to already allocated memory of sufficient size
+// cluster pointer should be pointing to already allocated memory of sufficient size
 bool load_cluster(FILE* disk, FAT32VolumeID* volume_id, int cluster_num, byte* cluster) {
 	unsigned int cluster_lba = volume_id->clusters_begin_lba + volume_id->sectors_per_cluster * (cluster_num - 2);
 	unsigned int cluster_offset = SECTOR_SIZE * cluster_lba;
@@ -39,7 +39,7 @@ bool load_cluster(FILE* disk, FAT32VolumeID* volume_id, int cluster_num, byte* c
 	return true;
 }
 
-// sector pointer should e pointing to already allocated memory of sufficient size
+// sector pointer should be pointing to already allocated memory of sufficient size
 bool load_sector(FILE* disk, int lba_adr, byte* sector) {
 	int n = fseek(disk, SECTOR_SIZE * lba_adr, SEEK_SET);
 	if (n != 0) {
